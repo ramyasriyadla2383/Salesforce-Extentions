@@ -1,0 +1,95 @@
+public class ShippingCartCalculatorSample extends CartExtension.ShippingCartCalculator {
+
+    private static String externalShippingServiceHost = 'https://example.com';
+    private static String externalShippingURL = externalShippingServiceHost + '/calculate-shipping-rates';
+    private static Boolean useExternalService = false;
+
+    // Returns estimated delivery date after 7 days
+    private static Date getEstimatedDeliveryDate() {
+        return Date.today().addDays(7);
+    }
+
+    // Formats date as "Mon Apr 7, 2026"
+    private static String formatDate(Date d) {
+        DateTime dt = DateTime.newInstance(d, Time.newInstance(0, 0, 0, 0));
+        return dt.format('EEE MMM d, yyyy');
+    }
+
+    // Builds the label shown in checkout
+    private static String buildMethodLabel(String baseName) {
+        Date edd = getEstimatedDeliveryDate();
+        return baseName + ' — Est. Delivery: ' + formatDate(edd);
+    }
+
+    public virtual override void calculate(CartExtension.CartCalculateCalculatorRequest request) {
+        CartExtension.Cart cart = request.getCart();
+
+        // Remove previous shipping validation outputs
+        CartExtension.CartValidationOutputList cartValidationOutputList = cart.getCartValidationOutputs();
+        for (Integer i = cartValidationOutputList.size() - 1; i >= 0; i--) {
+            CartExtension.CartValidationOutput cvo = cartValidationOutputList.get(i);
+            if (cvo.getType() == CartExtension.CartValidationOutputTypeEnum.SHIPPING) {
+                cartValidationOutputList.remove(cvo);
+            }
+        }
+
+        // Validate delivery groups
+        CartExtension.CartDeliveryGroupList cartDeliveryGroups = cart.getCartDeliveryGroups();
+        if (cartDeliveryGroups.size() == 0) {
+            CartExtension.CartValidationOutput cvo = new CartExtension.CartValidationOutput(
+                CartExtension.CartValidationOutputTypeEnum.SHIPPING,
+                CartExtension.CartValidationOutputLevelEnum.ERROR
+            );
+            cvo.setMessage('No Cart Delivery Groups have been defined');
+            cartValidationOutputList.add(cvo);
+            return;
+        }
+
+        CartExtension.CartDeliveryGroup cartDeliveryGroup = cartDeliveryGroups.get(0);
+        CartExtension.CartDeliveryGroupMethodList cartDeliveryGroupMethods =
+            cartDeliveryGroup.getCartDeliveryGroupMethods();
+
+        // Clear existing delivery methods
+        for (Integer i = cartDeliveryGroupMethods.size() - 1; i >= 0; i--) {
+            CartExtension.CartDeliveryGroupMethod method = cartDeliveryGroupMethods.get(i);
+            cartDeliveryGroupMethods.remove(method);
+        }
+        cartDeliveryGroup.setSelectedCartDeliveryGroupMethod(null);
+
+        // Get shipping product
+        List<Product2> shippingProducts = [
+            SELECT Id
+            FROM Product2
+            WHERE ProductClass != 'VariationParent'
+            LIMIT 1
+        ];
+
+        if (shippingProducts.isEmpty()) {
+            CartExtension.CartValidationOutput cvo = new CartExtension.CartValidationOutput(
+                CartExtension.CartValidationOutputTypeEnum.SHIPPING,
+                CartExtension.CartValidationOutputLevelEnum.ERROR
+            );
+            cvo.setMessage('No Shipping Products have been defined');
+            cartValidationOutputList.add(cvo);
+            return;
+        }
+
+        String shippingProduct = String.valueOf(shippingProducts[0].Id);
+
+        // Create only one shipping method
+        CartExtension.CartDeliveryGroupMethod deliveryMethod =
+            new CartExtension.CartDeliveryGroupMethod(
+                buildMethodLabel('Delivery Option'),
+                0.0,
+                shippingProduct
+            );
+
+        deliveryMethod.setCarrier('Default Carrier');
+        deliveryMethod.setClassOfService('Delivery in 7 Days');
+
+        cartDeliveryGroupMethods.add(deliveryMethod);
+
+        // Auto-select the only method
+        cartDeliveryGroup.setSelectedCartDeliveryGroupMethod(deliveryMethod);
+    }
+}
